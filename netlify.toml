@@ -1,0 +1,13 @@
+[build]
+# Keep build context at the repo root instead of an absolute path like /opt/build
+base = "."
+# Deploy the whole repo so CSS, JS, images, and audio are available
+publish = "."
+# Static site; no build step required
+command = ""
+
+[[redirects]]
+# Serve the main experiment page at the site root
+from = "/"
+to = "/static/index.html"
+status = 200
