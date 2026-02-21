@@ -171,6 +171,28 @@ function setBodyModalState(isOpen) {
   body.classList.remove("is-modal-open");
 }
 
+const COMPONENTS_EXIT_ALERT_MESSAGE =
+  "Now that you are familiar with all the components used in this experiment, you may now start the simulation \n\nAn AI guide is available to assist you at every step.";
+const COMPONENTS_EXIT_ALERT_AUDIO_SRC = "../audio/aftercomponentwindow.wav";
+const AUTO_CONNECT_COMPLETED_ALERT_MESSAGE =
+  "Autoconnect completed. Click on the check button to verify the connections.";
+const AUTO_CONNECT_COMPLETED_ALERT_AUDIO_SRC = "#";
+
+function normalizePopupMessage(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
+function resolvePopupAudioSrc(message) {
+  const normalized = normalizePopupMessage(message);
+  if (normalized === normalizePopupMessage(COMPONENTS_EXIT_ALERT_MESSAGE)) {
+    return COMPONENTS_EXIT_ALERT_AUDIO_SRC;
+  }
+  if (normalized === normalizePopupMessage(AUTO_CONNECT_COMPLETED_ALERT_MESSAGE)) {
+    return AUTO_CONNECT_COMPLETED_ALERT_AUDIO_SRC;
+  }
+  return "";
+}
+
 function showPopup(message, title = "Alert") {
   if (!message) return;
   const modal = document.getElementById("warningModal");
@@ -184,7 +206,9 @@ function showPopup(message, title = "Alert") {
   const sound = document.getElementById("alertSound");
 
   if (ttl) ttl.textContent = title;
-  if (msg) msg.textContent = message;
+  if (msg) {
+    msg.textContent = message;
+  }
 
   if (box) {
     box.classList.remove("closing");
@@ -194,6 +218,15 @@ function showPopup(message, title = "Alert") {
   setBodyModalState(true);
 
   if (sound && typeof sound.play === "function") {
+    const audioSrc = resolvePopupAudioSrc(message);
+    if (!audioSrc) {
+      if (typeof sound.pause === "function") sound.pause();
+      sound.removeAttribute("src");
+      return;
+    }
+    if (sound.getAttribute("src") !== audioSrc) {
+      sound.setAttribute("src", audioSrc);
+    }
     sound.currentTime = 0;
     const playPromise = sound.play();
     if (playPromise && typeof playPromise.catch === "function") {
@@ -866,8 +899,19 @@ function setupJsPlumb() {
       findButtonByLabel("Add Table") ||
       findButtonByLabel("Add To Table") ||
       findButtonByLabel("Add");
+    const autoBtn = findButtonByLabel("Auto Connect");
+    const disableAutoOnCheckedSpeech = connectionsVerified && guideSpeechActive();
     if (lampSelect) lampSelect.disabled = !ready;
     if (addBtn) addBtn.disabled = !ready;
+    if (autoBtn) {
+      if (disableAutoOnCheckedSpeech) {
+        autoBtn.dataset.guideLocked = "1";
+        autoBtn.disabled = true;
+      } else if (autoBtn.dataset.guideLocked === "1" && !isAutoConnecting) {
+        autoBtn.disabled = false;
+        delete autoBtn.dataset.guideLocked;
+      }
+    }
     updateStarterUI();
     updateRotorSpin();
   }
@@ -883,7 +927,7 @@ function setupJsPlumb() {
       window.dispatchEvent(new CustomEvent(MCB_TURNED_ON_EVENT));
       if (!silent) {
         showPopup(
-          "MCB is turned on. Now move the starter handle from left to right.",
+          "The MCB has been turned ON. Now move the starter handle from left to right.",
           "MCB ON"
         );
       }
@@ -1011,7 +1055,8 @@ function setupJsPlumb() {
         const key = [conn.sourceId, conn.targetId].sort().join("-");
         seenKeys.add(key);
         if (!allowedConnections.has(key)) {
-          illegal.push(key);
+          // Keep the user-made direction for clearer spoken feedback.
+          illegal.push(`${conn.sourceId}-${conn.targetId}`);
         }
       });
 
@@ -1026,7 +1071,7 @@ function setupJsPlumb() {
         starterMoved = false;
         window.dispatchEvent(new CustomEvent(CONNECTION_VERIFIED_EVENT));
         speakOrAlertLocal(
-          "Connections are correct. Click on the MCB to turn it ON."
+          "Connections are correct, click on the MCB to turn it on."
         );
         return;
       }
@@ -1037,13 +1082,44 @@ function setupJsPlumb() {
         const [a, b] = pair.split("-");
         const key = connectionKey(a, b);
         if (!seenKeys.has(key)) {
-          nextMissing = key;
+          // Preserve the required instruction order (e.g., B to A2).
+          nextMissing = pair;
           break;
         }
       }
 
       const firstIllegal = illegal[0] || null;
-      const message = "Please make all the connections first.";
+      const wrongConnectionLabels = illegal
+        .map((key) => formatConnectionDisplay(key))
+        .filter(Boolean);
+      const missingConnectionLabels = requiredPairs
+        .filter((pair) => {
+          const [a, b] = String(pair).split("-");
+          return a && b && !seenKeys.has(connectionKey(a, b));
+        })
+        .map((pair) => formatConnectionDisplay(pair))
+        .filter(Boolean);
+      const isInitialWiringState = seenKeys.size === 0;
+      const hasWrongDetails = wrongConnectionLabels.length > 0;
+      const hasMissingDetails = !isInitialWiringState && missingConnectionLabels.length > 0;
+      let message = hasWrongDetails || hasMissingDetails
+        ? ""
+        : "Please make all the connections first.";
+
+      if (wrongConnectionLabels.length) {
+        const preview = wrongConnectionLabels.slice(0, 3).join(", ");
+        const extraCount = Math.max(0, wrongConnectionLabels.length - 3);
+        const extraText = extraCount ? ` and ${extraCount} more` : "";
+        if (message && !message.endsWith(" ")) message += " ";
+        message += ` Wrong connection${wrongConnectionLabels.length > 1 ? "s" : ""}: ${preview}${extraText}.`;
+      }
+      if (!isInitialWiringState && missingConnectionLabels.length) {
+        const preview = missingConnectionLabels.slice(0, 3).join(", ");
+        const extraCount = Math.max(0, missingConnectionLabels.length - 3);
+        const extraText = extraCount ? ` and ${extraCount} more` : "";
+        if (message && !message.endsWith(" ")) message += " ";
+        message += ` Missing connection${missingConnectionLabels.length > 1 ? "s" : ""}: ${preview}${extraText}.`;
+      }
 
       let speechMessage = "Please make all the connections first.";
       if (firstIllegal) {
@@ -1053,9 +1129,9 @@ function setupJsPlumb() {
         speechMessage += ` Next connection: ${formatConnectionSpeech(nextMissing)}.`;
       }
 
-      // Always attempt to speak; still show popup fallback if speech is inactive.
+      // Always speak guidance. Show popup for wrong or missing connections.
       speakLocal(speechMessage, { interruptFirst: true });
-      if (!guideSpeechActive()) {
+      if (illegal.length || missing.length) {
         showPopup(message);
       }
       setMcbState(false, { silent: true });
@@ -1137,8 +1213,9 @@ function setupJsPlumb() {
         suppressAllAutoVoices = false;
         suppressGuideDuringAutoConnect = false;
         isAutoConnecting = false;
+        showPopup(AUTO_CONNECT_COMPLETED_ALERT_MESSAGE, "Instruction");
         if (guideWasActive && window.labSpeech && typeof window.labSpeech.speak === "function") {
-          window.labSpeech.speak("Auto connect completed. Click the Check button to verify the wiring.");
+          window.labSpeech.speak(AUTO_CONNECT_COMPLETED_ALERT_MESSAGE);
         }
       }, 0);
     });
@@ -1329,6 +1406,7 @@ function setupJsPlumb() {
       speakBtn.setAttribute("aria-pressed", "true");
       const label = speakBtn.querySelector(".speak-btn__label");
       if (label) label.textContent = "Guiding...";
+      updateControlLocks();
     }
 
     function speakGuide(text, options = {}) {
@@ -1384,7 +1462,7 @@ function setupJsPlumb() {
       if (firstIncomplete >= steps.length) {
         activateGuideUI();
         speakGuide(
-          "All connections are complete. Click the Check button to verify the wiring."
+          "All connections are complete. Click the Check button to verify the connections."
         );
         return;
       }
@@ -1430,6 +1508,7 @@ function setupJsPlumb() {
       if (resetUI) {
         resetSpeakButtonUI();
       }
+      updateControlLocks();
     }
 
     window.labSpeech.isActive = () => guideActive;
@@ -1478,7 +1557,7 @@ function setupJsPlumb() {
       currentStep = getFirstIncompleteStepIndex();
       if (currentStep >= steps.length) {
         speakGuide(
-          "All connections are complete. Click the Check button to verify the wiring."
+          "All connections are complete. Click the Check button to verify the connection."
         );
         return;
       }
@@ -1502,7 +1581,7 @@ function setupJsPlumb() {
 
     window.addEventListener(MCB_TURNED_ON_EVENT, function () {
       if (!guideActive) return;
-      speakGuide("Now move the starter handle from left to right.");
+      speakGuide("Now move the starter handle from left to right");
     });
 
     window.addEventListener(STARTER_MOVED_EVENT, function () {
@@ -1512,7 +1591,7 @@ function setupJsPlumb() {
 
     window.addEventListener(MCB_TURNED_OFF_EVENT, function () {
       if (!guideActive) return;
-      speakGuide("The MCB is turned off. Turn it on to continue.");
+      speakGuide("You turned off the MCB. Turn it back on to continue the simulation.");
     });
   })();
 
@@ -1691,6 +1770,10 @@ document.addEventListener("keydown", (e) => {
   // Override voltmeter-1 dial to land on ~225 V once starter is on.
   const voltmeter1ManualAngles = [5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5];
   const voltmeter2ManualAngles = [3, 1, -1, -3, -5, -7.8, -10, -13, -17, -20];
+  const GRAPH_TITLE_TEXT = "Terminal Voltage (V) vs Load Current (A)";
+  const GRAPH_X_AXIS_LABEL = "Load Current (A)";
+  const GRAPH_Y_AXIS_LABEL = "Terminal Voltage (V)";
+  const GRAPH_X_TICK_VALUES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
   const readingsRecorded = [];
   let selectedIndex = -1;
@@ -1848,19 +1931,20 @@ document.addEventListener("keydown", (e) => {
           y: voltages,
           mode: "lines+markers",
           type: "scatter",
+          name: GRAPH_TITLE_TEXT,
           marker: { color: "#1b6fb8", size: 8 },
           line: { color: "#1b6fb8", width: 3 }
         };
         const layout = {
-          title: { text: "<b>Terminal Voltage (V) vs Load Current (A)</b>" },
+          title: { text: `<b>${GRAPH_TITLE_TEXT}</b>` },
           margin: { l: 60, r: 20, t: 40, b: 50 },
           xaxis: {
-            title: "<b>Load Current (A)</b>",
+            title: `<b>${GRAPH_X_AXIS_LABEL}</b>`,
             gridcolor: "rgba(0, 0, 0, 0.07)",
             tickmode: "array",
-            tickvals: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+            tickvals: GRAPH_X_TICK_VALUES
           },
-          yaxis: { title: "<b>Terminal Voltage (V)</b>", gridcolor: "rgba(0, 0, 0, 0.07)" },
+          yaxis: { title: `<b>${GRAPH_Y_AXIS_LABEL}</b>`, gridcolor: "rgba(0, 0, 0, 0.07)" },
           paper_bgcolor: "rgba(0,0,0,0)",
           plot_bgcolor: "rgba(0,0,0,0)"
         };
@@ -1879,7 +1963,7 @@ document.addEventListener("keydown", (e) => {
           showPopup("Graph plotted. You can now generate the report.", "Graph Ready");
         }
         speak(
-          "The graph of terminal voltage versus load current has been plotted. Your experiment is now complete. You may view the report by clicking the Report button, then use Print to print the page or Reset to start again."
+          "The graph of terminal voltage versus load current has been plotted. Your experiment is now complete. You may view the report by clicking on the report button, then use print to print the page or reset to start again."
         );
       })
       .catch(() => {
@@ -2143,8 +2227,8 @@ tr:nth-child(even) { background-color: #f8fbff; }
       <li>DC Shunt Generator: 3 kW, 220 V DC, 1500 RPM</li>
       <li>Load Type: Resistive Lamp Load</li>
       <li>Bulbs: 10 × 200 W each</li>
-      <li>DC Voltmeter: 0-240 V</li>
-      <li>DC Ammeter: 0-20 A</li>
+      <li>DC Voltmeter: 0-420 V</li>
+      <li>DC Ammeter: 0-30 A</li>
       <li>Connecting Leads</li>
     </ul>
  
@@ -2178,20 +2262,24 @@ tr:nth-child(even) { background-color: #f8fbff; }
     (function() {
       var currents = ${JSON.stringify(currentValues)};
       var voltages = ${JSON.stringify(voltageValues)};
+      var graphTitle = ${JSON.stringify(GRAPH_TITLE_TEXT)};
+      var graphXAxisLabel = ${JSON.stringify(GRAPH_X_AXIS_LABEL)};
+      var graphYAxisLabel = ${JSON.stringify(GRAPH_Y_AXIS_LABEL)};
+      var graphXTickValues = ${JSON.stringify(GRAPH_X_TICK_VALUES)};
       var graphContainer = document.getElementById('report-graph');
       var graphReady = Promise.resolve();
 
       if (currents.length && voltages.length) {
-         var trace = { x: currents, y: voltages, type: 'scatter', mode: 'lines+markers', name: 'Terminal Voltage (V) vs Load Current (A)', line: { color: '#3498db' } };
+         var trace = { x: currents, y: voltages, type: 'scatter', mode: 'lines+markers', name: graphTitle, line: { color: '#3498db' } };
         var layout = {
-          title: { text: 'Terminal Voltage (V) vs Load Current (A)' },
+          title: { text: '<b>' + graphTitle + '</b>' },
           xaxis: {
-            title: { text: 'Load Current (A)', standoff: 12 },
+            title: { text: '<b>' + graphXAxisLabel + '</b>', standoff: 12 },
             automargin: true,
             tickmode: 'array',
-            tickvals: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+            tickvals: graphXTickValues
           },
-          yaxis: { title: { text: 'Terminal Voltage (V)', standoff: 12 }, automargin: true },
+          yaxis: { title: { text: '<b>' + graphYAxisLabel + '</b>', standoff: 12 }, automargin: true },
           margin: { t: 70, r: 30, l: 80, b: 70 }
         };
         graphReady = Plotly.newPlot('report-graph', [trace], layout, {displaylogo:false}).then(function(gd) {
@@ -2199,7 +2287,7 @@ tr:nth-child(even) { background-color: #f8fbff; }
         }).then(function(imgData) {
           var img = new Image();
           img.src = imgData;
-          img.alt = 'Terminal Voltage (V) vs Load Current (A)';
+          img.alt = graphTitle;
           img.style.maxWidth = '100%';
           img.style.height = 'auto';
           graphContainer.innerHTML = '';
@@ -2286,11 +2374,11 @@ tr:nth-child(even) { background-color: #f8fbff; }
       return;
     }
     showPopup(
-      "Report will open in a new tab. Please allow pop-ups.",
+      "Your report has been generated successfully. Click OK to view your report",
       "Report Ready"
     );
     if (speechIsActive()) {
-      speak("Opening the report in a new tab. Please allow pop ups.");
+      speak("Your report has been generated successfully. Click OK to view your report");
     }
     waitForWarningModalAcknowledgement().then(() => {
       generateReport();
@@ -2322,7 +2410,7 @@ tr:nth-child(even) { background-color: #f8fbff; }
       return;
     }
     if (readingsRecorded.length >= 10) {
-      speakOrAlert("You can only add maximum 10 readings in the table. Now, click on Graph button.");
+      speakOrAlert("You can add a maximum of 10 readings to the table. Now, click the Graph button.");
       return;
     }
 
@@ -2355,11 +2443,11 @@ tr:nth-child(even) { background-color: #f8fbff; }
     if (!allReadingsAlertShown && readingsRecorded.length === 10) {
       allReadingsAlertShown = true;
       showPopup(
-        "All 10 readings are recorded. Plot the graph, then click Report to generate your report.",
+        "All 10 readings have been recorded. Now, plot the graph and then click on the report button to generate your report.",
         "All Readings Added"
       );
       speak(
-        "All ten readings have been added. Please plot the graph and then click the Report button to view your report."
+        "All ten readings have been recorded. Now plot the graph and then click on the report button to generate your report."
       );
     }
     readingArmed = false;
@@ -2370,7 +2458,7 @@ tr:nth-child(even) { background-color: #f8fbff; }
     if (readingsRecorded.length < minGraphPoints) {
       speak("Once again, change the bulb selection.");
     } else if (readingsRecorded.length >= minGraphPoints && readingsRecorded.length < 10) {
-      speak("Now, you can plot the graph by clicking on the Graph button or add more readings to the table.");
+      speak("Now you can plot the graph by clicking on the graph button or add more readings to the table.");
     }
 
     if (!graphReadyAnnounced && readingsRecorded.length >= minGraphPoints) {
@@ -2408,9 +2496,9 @@ tr:nth-child(even) { background-color: #f8fbff; }
     updateNeedles(selectedIndex);
 
     if (readingsRecorded.length === 0) {
-      speak("Press the Add To Table button to insert the values into the table.");
+      speak("Click on the add to table button to add the reading to the observation table.");
     } else {
-      speak("Click the Add To Table button again.");
+      speak("Click add to table button again.");
     }
   }
 
@@ -2428,7 +2516,7 @@ tr:nth-child(even) { background-color: #f8fbff; }
       typeof window.SpeechSynthesisUtterance === "function";
 
     if (wasGuiding && speechSupported && window.labSpeech && typeof window.labSpeech.speak === "function") {
-      window.labSpeech.speak("Experiment reset. You can start again.", {
+      window.labSpeech.speak("The simulation has been reset. You can start again.", {
         onend: () => {
           if (typeof window.stopGuideSpeech === "function") {
             window.stopGuideSpeech();
@@ -2521,15 +2609,231 @@ tr:nth-child(even) { background-color: #f8fbff; }
     });
   }
 
+  const SIM_PRINT_CONTAINER_ID = "simulation-print-container";
+  const SIM_PRINT_ACTIVE_CLASS = "simulation-print-active";
+  const SIM_PRINT_CLONE_SCALE = 0.78;
+  let printLaunchInProgress = false;
+
+  function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function waitForNextFrame() {
+    return new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+
+  function cleanupSimulationPrintContainer() {
+    const existing = document.getElementById(SIM_PRINT_CONTAINER_ID);
+    if (existing) {
+      existing.remove();
+    }
+    if (document.body) {
+      document.body.classList.remove(SIM_PRINT_ACTIVE_CLASS);
+    }
+  }
+
+  async function waitForPrintAssets(targets) {
+    const fontReady =
+      document.fonts && typeof document.fonts.ready?.then === "function"
+        ? document.fonts.ready.catch(() => {})
+        : Promise.resolve();
+
+    const pendingImages = [];
+    targets.forEach((target) => {
+      if (!target || !target.querySelectorAll) return;
+      target.querySelectorAll("img").forEach((img) => {
+        if (img.complete) return;
+        pendingImages.push(
+          new Promise((resolve) => {
+            const done = () => resolve();
+            img.addEventListener("load", done, { once: true });
+            img.addEventListener("error", done, { once: true });
+          })
+        );
+      });
+    });
+
+    await Promise.race([Promise.all([fontReady, Promise.all(pendingImages)]), wait(1400)]);
+  }
+
+  async function syncPlotlyGraphForPrint(sourceFooter, clonedFooter) {
+    const sourcePlot = sourceFooter?.querySelector("#graphPlot");
+    const clonedPlot = clonedFooter?.querySelector("#graphPlot");
+    if (!sourcePlot || !clonedPlot) return;
+
+    const hasPlotData = Array.isArray(sourcePlot.data) && sourcePlot.data.length > 0;
+    if (!hasPlotData) return;
+    if (!window.Plotly || typeof window.Plotly.toImage !== "function") return;
+
+    try {
+      const rect = sourcePlot.getBoundingClientRect();
+      const width = Math.max(420, Math.round(rect.width || sourcePlot.clientWidth || 420));
+      const height = Math.max(280, Math.round(rect.height || sourcePlot.clientHeight || 280));
+      const dataUrl = await window.Plotly.toImage(sourcePlot, {
+        format: "png",
+        width,
+        height,
+        scale: 2
+      });
+
+      const plotImage = document.createElement("img");
+      plotImage.src = dataUrl;
+      plotImage.alt = "Output graph";
+      plotImage.className = "print-plot-image";
+      clonedPlot.replaceChildren(plotImage);
+      clonedPlot.style.display = "block";
+
+      const clonedBars = clonedFooter.querySelector("#graphBars");
+      if (clonedBars) clonedBars.style.display = "none";
+    } catch (error) {
+      console.warn("Print graph export failed; using cloned Plotly DOM output.", error);
+    }
+  }
+
+  function normalizePrintPanelClone(panelClone) {
+    const graphActions = panelClone?.querySelector(".graph-actions");
+    if (!graphActions) return;
+    // Keep action buttons at their original UI position in the print clone.
+    graphActions.classList.remove("print-actions-below-table");
+  }
+
+  function freezeMeterLabelPositionsForPrint(sourcePanel, panelClone) {
+    const sourceMeters = sourcePanel?.querySelector(".meters");
+    const cloneMeters = panelClone?.querySelector(".meters");
+    if (!sourceMeters || !cloneMeters) return;
+
+    const meterLabelIds = ["ammter1-label", "voltmeter1-label", "ammter2-label", "voltmeter2-label"];
+    const PRINT_LABEL_X_OFFSET = -14;
+    const PRINT_LABEL_Y_OFFSET = -6;
+    const sourceMetersRect = sourceMeters.getBoundingClientRect();
+
+    meterLabelIds.forEach((labelId) => {
+      const sourceLabel = sourcePanel.querySelector(`#${labelId}`);
+      const cloneLabel = panelClone.querySelector(`#${labelId}`);
+      if (!sourceLabel || !cloneLabel) return;
+
+      const labelRect = sourceLabel.getBoundingClientRect();
+      const frozenLeft = Math.round(labelRect.left - sourceMetersRect.left + PRINT_LABEL_X_OFFSET);
+      const frozenTop = Math.round(labelRect.top - sourceMetersRect.top + PRINT_LABEL_Y_OFFSET);
+
+      cloneLabel.style.position = "absolute";
+      cloneLabel.style.left = `${frozenLeft}px`;
+      cloneLabel.style.top = `${frozenTop}px`;
+      cloneLabel.style.margin = "0";
+      cloneLabel.style.transform = "none";
+      cloneLabel.style.gridColumn = "auto";
+      cloneLabel.style.gridRow = "auto";
+      cloneLabel.style.zIndex = "4";
+    });
+
+    cloneMeters.style.position = "relative";
+  }
+
+  // Simple print path: clone panel/footer, print clone only, then clean up.
+  async function simplePrintSimulation() {
+    if (printLaunchInProgress) return;
+    printLaunchInProgress = true;
+
+    const panel = document.querySelector(".panel");
+    const panelFooter = document.querySelector(".panel-footer");
+    if (!panel || !panelFooter || !document.body) {
+      printLaunchInProgress = false;
+      window.print();
+      return;
+    }
+
+    if (speechIsActive()) {
+      window.labSpeech.speak("Opening the print dialog.");
+    }
+
+    cleanupSimulationPrintContainer();
+
+    if (window.jsPlumb && typeof window.jsPlumb.repaintEverything === "function") {
+      try {
+        window.jsPlumb.repaintEverything();
+      } catch {}
+    }
+
+    await waitForNextFrame();
+    await waitForPrintAssets([panel, panelFooter]);
+    await wait(60);
+
+    const panelRect = panel.getBoundingClientRect();
+    const panelFooterRect = panelFooter.getBoundingClientRect();
+    const frozenPrintWidth = Math.max(
+      1,
+      Math.ceil(panelRect.width || panel.offsetWidth || 0),
+      Math.ceil(panelFooterRect.width || panelFooter.offsetWidth || 0)
+    );
+
+    const printContainer = document.createElement("div");
+    printContainer.id = SIM_PRINT_CONTAINER_ID;
+    printContainer.setAttribute("aria-hidden", "true");
+    printContainer.style.setProperty("--simulation-print-scale", String(SIM_PRINT_CLONE_SCALE));
+    printContainer.style.width = `${frozenPrintWidth}px`;
+    printContainer.style.maxWidth = "none";
+    printContainer.style.overflow = "visible";
+
+    const panelClone = panel.cloneNode(true);
+    const panelFooterClone = panelFooter.cloneNode(true);
+    panelClone.classList.add("print-clone-panel");
+    panelFooterClone.classList.add("print-clone-footer");
+    normalizePrintPanelClone(panelClone);
+    freezeMeterLabelPositionsForPrint(panel, panelClone);
+
+    // Freeze the clone at desktop geometry so print media queries do not reflow point positions.
+    panelClone.style.width = `${Math.ceil(panelRect.width || panel.offsetWidth || frozenPrintWidth)}px`;
+    panelClone.style.maxWidth = "none";
+    panelClone.style.maxHeight = "none";
+    panelClone.style.overflow = "visible";
+    panelClone.setAttribute("data-print-frozen", "true");
+
+    panelFooterClone.style.width = `${Math.ceil(panelFooterRect.width || panelFooter.offsetWidth || frozenPrintWidth)}px`;
+    panelFooterClone.style.maxWidth = "none";
+    panelFooterClone.style.maxHeight = "none";
+    panelFooterClone.style.overflow = "visible";
+    panelFooterClone.setAttribute("data-print-frozen", "true");
+
+    await syncPlotlyGraphForPrint(panelFooter, panelFooterClone);
+
+    printContainer.append(panelClone, panelFooterClone);
+    document.body.appendChild(printContainer);
+    document.body.classList.add(SIM_PRINT_ACTIVE_CLASS);
+
+    let cleanedUp = false;
+    let fallbackTimerId = 0;
+
+    const cleanupAfterPrint = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      window.clearTimeout(fallbackTimerId);
+      cleanupSimulationPrintContainer();
+      printLaunchInProgress = false;
+    };
+
+    window.addEventListener("afterprint", cleanupAfterPrint, { once: true });
+    fallbackTimerId = window.setTimeout(cleanupAfterPrint, 120000);
+
+    try {
+      await waitForNextFrame();
+      window.print();
+    } catch (error) {
+      console.warn("Unable to open print dialog.", error);
+      cleanupAfterPrint();
+    }
+  }
+  window.simplePrintSimulation = simplePrintSimulation;
+
   if (resetBtn) resetBtn.addEventListener("click", resetObservations);
   if (printBtn) {
-    printBtn.addEventListener("click", () => {
-      if (speechIsActive()) {
-        window.labSpeech.speak("Opening the print dialog.");
-      }
-      window.print();
-    });
+    printBtn.addEventListener("click", simplePrintSimulation);
   }
+  document.addEventListener("keydown", (event) => {
+    const printShortcut = (event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === "p";
+    if (!printShortcut) return;
+    event.preventDefault();
+    simplePrintSimulation();
+  });
   if (reportBtn) {
     reportBtn.addEventListener("click", handleReportClick);
     reportBtn.disabled = true;
@@ -2579,52 +2883,52 @@ tr:nth-child(even) { background-color: #f8fbff; }
         {
           id: "mcb",
           selector: ".mcb-toggle, .mcb-block img",
-          text: "MCB: Main supply breaker for the setup; trips on overload/short-circuit to protect the circuit and users."
+          text: "Purpose: To ensure the safety of equipment and users by tripping during electrical faults."
         },
         {
           id: "starter",
           selector: ".starter-body, .starter-handle",
-        text: "3-Point Starter: Limits the DC motor starting current and provides no-volt/overload protection; drag the handle after turning ON the MCB."
+        text: "Purpose: Limits the starting current of a DC motor by using external armature resistance, which is cut out as the motor speeds up, and provides overload and no-voltage protection."
       },
       {
         id: "lamp-load",
         selector: ".lamp-bulb",
-        text: "Lamp Load: Variable resistive bulb bank used to change load; select the number of bulbs to vary current and observe voltage regulation."
+        text: "Purpose: It helps in observing how the terminal voltage varies with the load current."
       },
       {
         id: "ammeter-1",
         selector: ".meter-card:nth-of-type(1) > img",
-        text: "Ammeter-1: Measures the motor/supply current (connected in series)."
+        text: "Purpose: To measure the current drawn by the DC shunt motor during operation."
       },
       {
         id: "voltmeter-1",
         selector: ".meter-card:nth-of-type(2) > img",
-        text: "Voltmeter-1: Measures the supply/line voltage (connected across the source)."
+        text: "Purpose:  To measure the voltage of the main supply."
       },
       {
         id: "ammeter-2",
         selector: ".meter-card:nth-of-type(3) > img",
-        text: "Ammeter-2: Measures the load current through the lamp load (connected in series with the load)."
+        text: "Purpose:  To measure the load current (IL) delivered by the DC shunt generator."
       },
       {
         id: "voltmeter-2",
         selector: ".meter-card:nth-of-type(4) > img",
-        text: "Voltmeter-2: Measures the generator terminal voltage (connected across generator terminals)."
+        text: "Purpose: It is connected in parallel across the generator terminals to measure the terminal voltage (V) of the DC shunt generator."
       },
       {
         id: "dc-motor",
         selector: ".motor-box > img",
-        text: "DC Shunt Motor: Prime mover converting electrical power to mechanical power to drive the generator."
+        text: "Purpose: It acts as a prime mover, converting electrical energy into mechanical energy to drive the DC shunt generator."
       },
       {
         id: "coupler",
         selector: ".coupler > img",
-        text: "Coupling/Shaft: Mechanical link that transfers torque from the motor to the generator."
+        text: "Purpose: The shaft is used to mechanically couple the DC shunt motor with the DC shunt generator."
       },
       {
         id: "dc-generator",
         selector: ".generator-body, .generator-rotor",
-        text: "DC Shunt Generator: Converts mechanical power from the motor into DC output for the load; terminal voltage is measured on Voltmeter-2."
+        text: "Purpose: It converts the mechanical energy received from the motor into electrical energy and supplies power to the load for studying the load characteristics of a DC shunt generator."
       },
       // {
       //   id: "output-graph",
@@ -2946,8 +3250,7 @@ tr:nth-child(even) { background-color: #f8fbff; }
   let autoPlayPending = !hasAutoPlayedAudio();
   let autoPlayRequested = false;
   let autoPlayRetryArmed = false;
-  const COMPONENTS_EXIT_MESSAGE =
-    "Now that you are familiar with all the components used in this experiment, you may now start the experiment.\n\nAn AI guide is available to assist you at every step.";
+  const COMPONENTS_EXIT_MESSAGE = COMPONENTS_EXIT_ALERT_MESSAGE;
 
   function showComponentsExitAlert() {
     if (hasShownComponentsAlert()) return;
@@ -3140,40 +3443,3 @@ tr:nth-child(even) { background-color: #f8fbff; }
   });
 })();
 
-/**
- * Keep the printed layout identical to the on‑screen layout by dynamically
- * scaling the panel to the available print width and locking the desktop
- * breakpoints even inside the print dialog.
- */
-(function setupPrintScaling() {
-  function updatePrintScale() {
-    const panel = document.querySelector(".panel");
-    if (!panel) return;
-
-    // Approximate printable width: viewport minus the 10mm page margins set in CSS
-    const pxPerMm = 3.78; // 96dpi → 1mm ≈ 3.78px
-    const marginPx = 10 * pxPerMm * 2; // left + right
-    const available = Math.max(320, window.innerWidth - marginPx);
-    const needed = Math.max(panel.scrollWidth || 0, panel.offsetWidth || 0);
-    if (!needed) return;
-
-    const scale = Math.min(1, Math.max(0.35, available / needed));
-    document.documentElement.style.setProperty("--print-scale", scale.toFixed(3));
-  }
-
-  function clearPrintScale() {
-    document.documentElement.style.removeProperty("--print-scale");
-  }
-
-  window.addEventListener("beforeprint", updatePrintScale);
-  window.addEventListener("afterprint", clearPrintScale);
-
-  if (window.matchMedia) {
-    const mq = window.matchMedia("print");
-    const listener = (e) => {
-      if (e.matches) updatePrintScale();
-    };
-    // Support modern and older browsers
-    mq.addEventListener ? mq.addEventListener("change", listener) : mq.addListener(listener);
-  }
-})();

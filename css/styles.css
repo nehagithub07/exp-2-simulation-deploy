@@ -79,6 +79,7 @@ body {
   border-radius: 8px;
   scrollbar-gutter: stable both-edges;
   -webkit-overflow-scrolling: touch;
+  margin-top: clamp(8px, 1.2vw, 14px);
 }
 
 .top-row {
@@ -662,10 +663,15 @@ h3 {
 }
 
 .hover-tooltip__text {
-  line-height: 1.35;
-  letter-spacing: 0.1px;
+  line-height: 1.45;
+  letter-spacing: 0;
   font-weight: 600;
   color: #152a44;
+  text-align: justify;
+  text-align-last: left;
+  text-justify: auto;
+  word-spacing: normal;
+  hyphens: auto;
 }
 
 /* ---- LABELS (always below meters, never cut) ---- */
@@ -1637,7 +1643,8 @@ body.is-modal-open {
 #modalMessage {
   color: #3b2f24;
   white-space: pre-line;
-  text-align: center;
+  text-align: justify;
+  text-align-last: center;
   line-height: 1.55;
   margin: 0;
 }
@@ -2380,14 +2387,12 @@ body.is-modal-open {
 /* =========================
    PRINT LAYOUT
 ========================= */
-@media print {
-  :root {
-    /* Downscale the whole experience while keeping the exact layout proportions */
-    --print-scale: 0.58;
-  }
+#simulation-print-container {
+  display: none;
+}
 
+@media print {
   @page {
-    size: A4 landscape;
     margin: 10mm;
   }
 
@@ -2398,76 +2403,161 @@ body.is-modal-open {
     overflow: visible !important;
     print-color-adjust: exact;
     -webkit-print-color-adjust: exact;
-    background: var(--bg);
+    background: #fff !important;
   }
 
-  body {
-    /* Scale everything instead of reflowing the grid so the printed view matches the UI */
-    zoom: var(--print-scale);
-    transform-origin: top left;
+  /* Print only the temporary cloned simulation content. */
+  body.simulation-print-active {
+    display: block !important;
   }
 
-  /* Fallback for browsers that do not support zoom (e.g., Firefox) */
-  @supports not (zoom: 1) {
-    body {
-      transform: scale(var(--print-scale));
-      width: calc(100% / var(--print-scale));
-    }
+  body.simulation-print-active > * {
+    display: none !important;
   }
 
-  /* Force desktop layout even if the print viewport is narrow */
-  .top-row {
-    grid-template-columns: 1fr 2.6fr 1.2fr !important;
-    padding-bottom: clamp(18px, 1.5vw, 24px);
-  }
-
-  .left-column,
-  .center-column {
-    border-right: 3px solid var(--ink);
-    width: 100%;
-    max-width: 100%;
-  }
-
-  .observation-floating {
-    position: absolute !important;
-    top: 250px;
-    right: -50px;
-    transform: translateX(calc(100% + clamp(8px, 2vw, 16px)));
-    width: clamp(220px, 22vw, 340px);
-    max-width: none;
-    min-width: 0;
-    margin-top: 0;
-  }
-
-  .observation-section,
-  .graph-section,
-  .panel-footer {
-    page-break-inside: avoid;
-  }
-
-  .panel,
-  .panel-footer {
-    width: var(--panel-max) !important;
+  body.simulation-print-active > #simulation-print-container {
+    display: block !important;
+    width: auto !important;
     max-width: none !important;
-    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
     overflow: visible !important;
-    margin: 0 auto !important;
-    box-shadow: none;
-    page-break-inside: avoid;
+    /* Scale only the temporary print clone so full panel fits on the page. */
+    zoom: var(--simulation-print-scale, 0.78) !important;
   }
 
-  /* Hide only floating helpers during print */
-  #pill-stack,
-  .graph-actions,
+  body.simulation-print-active #simulation-print-container .panel,
+  body.simulation-print-active #simulation-print-container .panel-footer {
+    width: auto !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  /* Keep desktop geometry so print output matches the UI layout. */
+  body.simulation-print-active #simulation-print-container .top-row {
+    grid-template-columns: 1fr 2.6fr 1.2fr !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .left-column,
+  body.simulation-print-active #simulation-print-container .center-column {
+    border-bottom: none !important;
+    border-right: 3px solid var(--ink) !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .observation-floating {
+    position: absolute !important;
+    top: 250px !important;
+    right: -30px !important;
+    transform: translateX(calc(100% + clamp(2px, 0.8vw, 6px))) !important;
+    width: clamp(250px, 24vw, 370px) !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    z-index: 2 !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .observation-table-wrapper {
+    overflow: hidden !important;
+  }
+
+  body.simulation-print-active #simulation-print-container #observationTable {
+    width: 100% !important;
+    table-layout: fixed !important;
+  }
+
+  body.simulation-print-active #simulation-print-container #observationTable th {
+    white-space: normal !important;
+    word-break: break-word !important;
+    line-height: 1.15 !important;
+    font-size: 0.62rem !important;
+    padding: 3px 3px !important;
+  }
+
+  body.simulation-print-active #simulation-print-container #observationTable td {
+    white-space: nowrap !important;
+    font-size: 0.72rem !important;
+    padding: 3px 3px !important;
+  }
+
+  /* Print-only fine tune: lamp-load L1/L2 points slightly lower. */
+  body.simulation-print-active #simulation-print-container #pointL1,
+  body.simulation-print-active #simulation-print-container #pointL2 {
+    top: 286px !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .point-L1,
+  body.simulation-print-active #simulation-print-container .point-L2 {
+    top: 300px !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .graph-actions {
+    position: relative !important;
+    top: 390px !important;
+    left: 990px !important;
+    transform: scale(0.5) !important;
+    transform-origin: top left !important;
+    width: max-content !important;
+  }
+
+  /* Prevent print viewport breakpoints from moving endpoint label geometry. */
+  body.simulation-print-active #simulation-print-container .meters {
+    grid-template-columns: repeat(4, minmax(140px, 1fr)) !important;
+    grid-template-rows: auto auto !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .meter-card {
+    min-width: 140px !important;
+    grid-row: 1 !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .meter-card:nth-child(3),
+  body.simulation-print-active #simulation-print-container .meter-card:nth-child(4) {
+    grid-row: 1 !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .panel {
+    border-width: 2px !important;
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .panel-footer {
+    page-break-before: always !important;
+    break-before: page !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .print-clone-footer .graph-section,
+  body.simulation-print-active #simulation-print-container .print-clone-footer .graph-canvas,
+  body.simulation-print-active #simulation-print-container .print-clone-footer #graphPlot {
+    overflow: visible !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .print-plot-image {
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+  }
+
+  body.simulation-print-active #simulation-print-container .jtk-connector,
+  body.simulation-print-active #simulation-print-container .jtk-endpoint,
+  body.simulation-print-active #simulation-print-container .jtk-overlay {
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+
+  /* Hide helper overlays if native print is triggered directly. */
+  #componentsModal,
+  #instructionModal,
+  .components-overlay,
+  .modal,
   .instructions-panel,
   .instruction-overlay,
   .chatbot-widget,
   .hover-tooltip {
     display: none !important;
   }
-
-  .graph-bars { display: none !important; }
-  #graphPlot { display: block !important; }
 }
 
 /* =========================
